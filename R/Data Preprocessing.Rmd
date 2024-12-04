@@ -1,0 +1,204 @@
+---
+title: "Thymoma Data Preprocessing"
+output: html_document
+date: "2024-10-16"
+---
+
+```{r}
+library(minfi)
+library(IlluminaHumanMethylationEPICmanifest)
+library(IlluminaHumanMethylationEPICanno.ilm10b2.hg19)
+library(ENmix)
+library(readr)
+library(dplyr)
+library(sesame)
+'%!in%' <- Negate('%in%')
+```
+
+===============================================================================================================
+===============================================================================================================
+TGCA Preprocessing
+===============================================================================================================
+===============================================================================================================
+
+Reading in IDATs.
+
+```{r}
+idat <- "~/Desktop/Christensen Lab/Thymoma Classification/Data/TCGA/IDATs/TCGA IDATs"
+rgSet <- readidat(idat)
+```
+
+Quality Control.
+
+```{r}
+setwd("~/Desktop/Christensen Lab/Thymoma Classification/QC")
+qcinfo <- ENmix::QCinfo(rgSet)
+length(qcinfo$badsample)
+length(qcinfo$badCpG)
+betasTCGA <- mpreprocess(rgSet = rgSet, nCores = 3, qc = FALSE)
+dim(betasTCGA)
+betasTCGA <- betasTCGA[row.names(betasTCGA) %!in% qcinfo$badCpG, colnames(betasTCGA) %!in% qcinfo$badsample]
+dim(betasTCGA)
+save(betasTCGA, file = "~/Desktop/Christensen Lab/Thymoma Classification/Data/betasTGCA.RData")
+```
+
+Loading the quality-controlled betas.
+
+```{r}
+load("~/Desktop/Christensen Lab/Thymoma Classification/Data/TCGA/betasTGCA.RData")
+```
+
+Removing masked probes.
+
+```{r}
+annot <- read.table(file = '~/Desktop/Christensen Lab/Senior Thesis/RData/EPIC.hg19.manifest.tsv', sep = '\t', header = TRUE)
+annot_filtered <- annot[(substr(annot$probeID, 1, 2) %!in% c("ch","rs")),]
+annot_filtered <- annot_filtered %>%
+                  filter(MASK_general == "FALSE") %>%
+                  filter(CpG_chrm != "chrX") %>% 
+                  filter(CpG_chrm != "chrY")
+dim(annot_filtered) # 746980 CpGs
+dim(betasTCGA) # 866297 CpGs
+betasTCGA <- betasTCGA[rownames(betasTCGA) %in% annot_filtered$probeID,]
+dim(betasTCGA) # 746980 CpGs
+colnames(betasTCGA) <- substr(colnames(betasTCGA),1,36)
+```
+
+Loading covariate data.
+
+```{r}
+setwd("~/Desktop/Christensen Lab/Thymoma Classification/Data/TCGA/Covariate Data")
+clinical <- read_tsv("clinical.tsv")
+sample_sheet <- read_tsv("gdc_sample_sheet.2023-08-01.tsv")
+sample_sheet <- sample_sheet[sample_sheet$`Data Type` == "Masked Intensities",]
+sample_sheet$SampleID <- substr(sample_sheet$`File Name`,1,36)
+sample_sheet <- sample_sheet[match(clinical$case_submitter_id, sample_sheet$`Case ID`),]
+sample_sheet <- sample_sheet[seq(1,nrow(sample_sheet),2),]
+
+# Removing columns with empty values
+columns_to_drop = c()
+for (i in 1:length(clinical)){
+  if (length(unique(clinical[,i])) == 1 && clinical[,i][1] == "'--"){
+    columns_to_drop <- append(columns_to_drop, i)
+  }
+}
+# Dropping the identified columns from the DataFrame
+clinical <- clinical[, -columns_to_drop]
+clinical <- clinical[seq(1,nrow(clinical),2),]
+clinical$SampleID <- sample_sheet$SampleID
+
+phenoTCGA <- clinical
+phenoTCGA <- phenoTCGA[,c(4,7,19,30)]
+save(phenoTCGA, file = "~/Desktop/Christensen Lab/Thymoma Classification/Data/TCGA/phenoTCGA.RData")
+```
+
+===============================================================================================================
+===============================================================================================================
+GEO Preprocessing
+===============================================================================================================
+===============================================================================================================
+Reading in IDATs.
+
+```{r}
+idat <- "~/Desktop/Christensen Lab/Thymoma Classification/Data/GEO/GSE218549_RAW"
+rgSet <- readidat(idat)
+```
+
+Quality Control.
+
+```{r}
+setwd("~/Desktop/Christensen Lab/Thymoma Classification/QC/GEO")
+qcinfo <- ENmix::QCinfo(rgSet)
+length(qcinfo$badsample)
+length(qcinfo$badCpG)
+betasGEO <- mpreprocess(rgSet = rgSet, nCores = 3, qc = FALSE)
+dim(betasGEO)
+betasGEO <- betasGEO[row.names(betasGEO) %!in% qcinfo$badCpG, colnames(betasGEO) %!in% qcinfo$badsample]
+dim(betasGEO)
+save(betasGEO, file = "~/Desktop/Christensen Lab/Thymoma Classification/Data/GEO/betasGEO.RData")
+```
+
+Loading the quality-controlled betas.
+
+```{r}
+load("~/Desktop/Christensen Lab/Thymoma Classification/Data/GEO/betasGEO.RData")
+View(head(betasGEO))
+```
+
+Estimating age, sex, and ethnicity.
+
+```{r}
+# Age
+GEOAge <- methyAge(betasGEO)
+```
+```{r}
+# Sex
+GEOSex = NULL
+setwd("~/Desktop/Christensen Lab/Thymoma Classification/Data/GEO/GSE218549_RAW")
+for(i in 1:length(colnames(betasGEO))){
+  sdf = readIDATpair(colnames(betasGEO)[i])
+  GEOSex[i] = inferSex(sdf, platform = "EPIC")
+}
+```
+
+```{r}
+GEOethnicity = NULL
+setwd("~/Desktop/Christensen Lab/Thymoma Classification/Data/GEO/GSE218549_RAW")
+for(i in 1:length(colnames(betasGEO))){
+  sdf = readIDATpair(colnames(betasGEO)[i])
+  GEOethnicity[i] = inferEthnicity(sdf)
+  
+}
+# All white.
+```
+
+Removing masked probes.
+
+```{r}
+annot <- read.table(file = '~/Desktop/Christensen Lab/Senior Thesis/RData/EPIC.hg19.manifest.tsv', sep = '\t', header = TRUE)
+annot_filtered <- annot[(substr(annot$probeID, 1, 2) %!in% c("ch","rs")),]
+annot_filtered <- annot_filtered %>%
+                  filter(MASK_general == "FALSE") %>%
+                  filter(CpG_chrm != "chrX") %>% 
+                  filter(CpG_chrm != "chrY")
+dim(annot_filtered) # 746980 CpGs
+dim(betasGEO) # 832292 CpGs
+betasGEO_filtered <- betasGEO[rownames(betasGEO) %in% annot_filtered$probeID,]
+colnames(betasGEO_filtered) <- substr(colnames(betasGEO_filtered),1,10)
+dim(betasGEO) # 719072 CpGs
+# Subsetting to only the ones in the TCGA matrix
+betasGEO_filtered <- betasGEO_filtered[row.names(betasGEO_filtered) %in% row.names(betasTCGA),]
+dim(betasGEO_filtered)
+View(head(betasGEO_filtered))
+betasGEO_final <- betasGEO_filtered[,row.names(phenoGEO)]
+colnames(betasGEO_final) == row.names(phenoGEO)
+# Subsetting the CpGs in the TCGA matrix to only be in the GEO matrix
+betasTCGA_filtered <- betasTCGA[row.names(betasTCGA) %in% row.names(betasGEO_filtered),]
+dim(betasTCGA_filtered)
+colnames(betasTCGA_filtered) <- substr(colnames(betasTCGA_filtered),1,36)
+View(head(betasTCGA_filtered))
+betasTCGA_final <- betasTCGA_filtered[,phenoTCGA$SampleID]
+
+save(betasGEO_final, file = "~/Desktop/Christensen Lab/Thymoma Classification/Data/GEO/betasGEO_final.RData")
+save(betasTCGA_final, file = "~/Desktop/Christensen Lab/Thymoma Classification/Data/TCGA/betasTCGA_final.RData")
+```
+
+Loading covariate data.
+
+```{r}
+library(GEOquery)
+Sys.setenv(VROOM_CONNECTION_SIZE=900000000)
+geoMat <- getGEO("GSE218549") #Supply GEO number
+phenoGEO <- pData(geoMat[[1]])
+phenoGEO <- phenoGEO[row.names(phenoGEO) %in% colnames(betasGEO),c("geo_accession","description")]
+phenoGEO$AgeHorvath <- GEOAge$mAge_Hovath
+phenoGEO$AgeHannum <- GEOAge$mAge_Hannum
+phenoGEO$PhenoAge <- GEOAge$PhenoAge
+phenoGEO$PACE <- GEOAge$PACE
+phenoGEO$Sex <- GEOSex
+save(phenoGEO, file="~/Desktop/Christensen Lab/Thymoma Classification/Data/GEO/phenoGEO.RData")
+```
+
+
+
+

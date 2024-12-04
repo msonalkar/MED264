@@ -1,0 +1,97 @@
+---
+title: "Thymoma Batch Effects"
+output: html_document
+date: "2024-10-16"
+---
+
+Loading the libraries.
+```{r}
+library(sva)
+library(dplyr)
+library(stringr)
+```
+
+Loading all the data.
+```{r}
+load("~/Desktop/Christensen Lab/Thymoma Classification/Data/GEO/phenoGEO.RData")
+load("~/Desktop/Christensen Lab/Thymoma Classification/Data/GEO/betasGEO_final.RData")
+load("~/Desktop/Christensen Lab/Thymoma Classification/Data/TCGA/phenoTCGA.RData")
+load("~/Desktop/Christensen Lab/Thymoma Classification/Data/TCGA/betasTCGA_final.RData")
+```
+
+
+=========================================================================================
+=========================================================================================
+Combining GEO and TCGA data.
+=========================================================================================
+=========================================================================================
+
+```{r}
+# Matching the order of the rows (CpGs) of the two beta values matrices
+betasGEO_final <- betasGEO_final[row.names(betasTCGA_final),]
+# Checking to see if they match
+FALSE %in% (row.names(betasGEO_final) == row.names(betasTCGA_final))
+
+betasGEO_final <- as.data.frame(betasGEO_final)
+betasTCGA_final <- as.data.frame(betasTCGA_final)
+
+# Merging beta matrices
+combinedBetas <- cbind(betasGEO_final, betasTCGA_final)
+```
+
+```{r}
+# Cleaning the TCGA pheno data
+phenoTCGA <- as.data.frame(phenoTCGA)
+phenoTCGA$CancerType <- phenoTCGA$primary_diagnosis
+phenoTCGA <- phenoTCGA %>% mutate(CancerType = ifelse(str_detect(CancerType,"carcinoma"),"Thymic carninoma","Thymoma"))
+phenoTCGA <- phenoTCGA %>% mutate(gender = ifelse(gender=="male","Male","Female"))
+phenoTCGA$CancerSubtype <- phenoTCGA$primary_diagnosis
+phenoTCGA$CancerSubtype <- gsub("Thymoma, type ", "", phenoTCGA$CancerSubtype)
+phenoTCGA$CancerSubtype <- gsub(", malignant", "", phenoTCGA$CancerSubtype)
+phenoTCGA$CancerSubtype <- gsub(", NOS", "", phenoTCGA$CancerSubtype)
+phenoTCGA$primary_diagnosis <- NULL
+row.names(phenoTCGA) <- phenoTCGA$SampleID
+phenoTCGA$SampleID <- NULL
+colnames(phenoTCGA) <- c("Age", "Sex", "CancerType", "CancerSubtype")
+
+# Cleaning the GEO pheno data
+phenoGEO$CancerType <- phenoGEO$description
+phenoGEO <- phenoGEO %>% mutate(CancerType = ifelse(str_detect(CancerType,"thymoma"),"Thymoma","Normal"))
+phenoGEO <- phenoGEO[,c(2,3,7,8)]
+phenoGEO <- phenoGEO %>% mutate(Sex = ifelse(Sex=="MALE","Male","Female"))
+phenoGEO$CancerSubtype <- phenoGEO$description
+phenoGEO$CancerSubtype <- gsub(" thymoma", "", phenoGEO$CancerSubtype)
+phenoGEO$CancerSubtype <- gsub("type ", "", phenoGEO$CancerSubtype)
+phenoGEO$description <- NULL
+colnames(phenoGEO) <- c("Age", "Sex", "CancerType", "CancerSubtype")
+
+# Merging the covariate data
+combinedPheno <- rbind(phenoGEO,phenoTCGA)
+
+save(combinedPheno, file = "~/Desktop/Christensen Lab/Thymoma Classification/Data/combinedPheno.RData")
+```
+
+```{r}
+colnames(combinedBetas) == row.names(combinedPheno)
+```
+
+=========================================================================================
+=========================================================================================
+Correcting for batch effects between studies.
+=========================================================================================
+=========================================================================================
+
+```{r}
+# Batch corrections using comBat
+batch1 <- rep(1,115)
+batch2 <- rep(2,94)
+batch <- c(batch1,batch2)
+
+combinedBetas_batch_corrected <- ComBat(dat=combinedBetas,batch = batch)
+
+save(combinedBetas_batch_corrected, file = "~/Desktop/Christensen Lab/Thymoma Classification/Data/combinedBetas_batch_corrected.RData")
+```
+
+
+
+
